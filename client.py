@@ -4,7 +4,7 @@ import time
 import threading
 import queue
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSlot
 from PyQt5.QtWidgets import (QApplication, QCheckBox, QGridLayout, QGroupBox,
                              QMenu, QPushButton, QRadioButton, QVBoxLayout, QWidget, QSlider, QLabel, QSizePolicy)
 
@@ -12,37 +12,45 @@ async def sendCommand(websocket, command, value):
     await websocket.send(str(command))
     await websocket.send(str(value))
 
-async def volumeLoop(websocket, dataQueue, killEvent):
-    while True and not killEvent.is_set():        
+async def sendLoop(websocket, dataOutQueue, killEvent):
+    while True and not killEvent.is_set():
         try:
-            item = dataQueue.get_nowait()
+            item = dataOutQueue.get_nowait()
+            print(item)
             await sendCommand(websocket, item[0], item[1])
-            dataQueue.task_done()
+            dataOutQueue.task_done()
         except:
             pass
         await asyncio.sleep(0.001)
     return
 
-async def volumeHandler(loop, dataQueue, killEvent):
-        uri = "ws://localhost:80"
+async def recvLoop(websocket, dataInQueue, killEvent):
+    while True and not killEvent.is_set():
+        res = await websocket.recv()
+        dataInQueue.put_nowait(res)
+
+async def volumeHandler(loop, dataOutQueue, dataInQueue, killEvent):
+        uri = "ws://localhost:6000"
         async with websockets.connect(uri) as websocket:
-            await asyncio.create_task(volumeLoop(websocket, dataQueue, killEvent))
+            await asyncio.create_task(sendLoop(websocket, dataOutQueue, killEvent))
+            await asyncio.create_task(recvLoop(websocket, dataInQueue, killEvent))
         loop.stop()
         return
 
-def volumeThread(dataQueue, killEvent):
+def volumeThread(dataOutQueue, dataInQueue, killEvent):
     loop = asyncio.new_event_loop()
-    loop.run_until_complete(volumeHandler(loop, dataQueue, killEvent))
+    loop.run_until_complete(volumeHandler(loop, dataOutQueue, dataInQueue, killEvent))
     loop.run_forever()
     return
 
 class mainWindow(QWidget):
-    def __init__(self, dataQueue):
+    def __init__(self, dataOutQueue):
         super(mainWindow, self).__init__()
 
-        self.dataQueue = dataQueue
+        self.dataOutQueue = dataOutQueue
 
         self.volume = 0
+        self.mute = 0
 
         layout = QGridLayout()
 
@@ -76,8 +84,10 @@ class mainWindow(QWidget):
 
     def update(self):
         self.volLabel.setText(str(self.volume))
+        self.volSlider.valueChanged.disconnect()
         self.volSlider.setValue(self.volume)
-        self.dataQueue.put_nowait(("SET", self.volume/100.0))
+        self.volSlider.valueChanged.connect(self.setVol)
+        self.dataOutQueue.put(("SET", self.volume/100.0))
 
     def setVol(self, value):
         self.volume = value
@@ -97,14 +107,15 @@ class mainWindow(QWidget):
         
 if __name__ == "__main__":
     try:
-        dataQueue = queue.Queue()
+        dataOutQueue = queue.Queue()
+        dataInQueue = queue.Queue()
         killEvent = threading.Event()
         
-        socketThread = threading.Thread(target=volumeThread, args=((dataQueue, killEvent)))
+        socketThread = threading.Thread(target=volumeThread, args=((dataOutQueue, dataInQueue, killEvent)))
         socketThread.start()
 
         app = QApplication([])
-        window = mainWindow(dataQueue)
+        window = mainWindow(dataOutQueue)
 
         try:
             app.exec_()

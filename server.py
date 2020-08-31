@@ -15,7 +15,8 @@ async def volume(websocket, path, volumeObj):
         value = await websocket.recv()
         print(value)
 
-        volumeObj.SetMasterVolumeLevelScalar(float(value), None)
+        if command == "SET":
+            volumeObj.SetMasterVolumeLevelScalar(float(value), None)
 
 if __name__ == "__main__":
 
@@ -24,7 +25,7 @@ if __name__ == "__main__":
         IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
     volumeObj = cast(interface, POINTER(IAudioEndpointVolume))
 
-    port = 80
+    port = 6000
     start_server = websockets.serve(functools.partial(volume, volumeObj=volumeObj), '', port)
 
     asyncio.get_event_loop().run_until_complete(start_server)
